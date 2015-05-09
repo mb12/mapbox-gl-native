@@ -493,12 +493,11 @@ const NSTimeInterval MGLFlushInterval = 60;
         MGLMapboxEvents *strongSelf = weakSelf;
         if ( ! strongSelf || [_eventQueue count] == 0) return;
         
-        // Create Array of Events to push to the Server
-        NSRange theRange = NSMakeRange(0, MIN(MGLMaximumEventsPerFlush, [_eventQueue count]));
-        NSArray *events = [_eventQueue subarrayWithRange:theRange];
-        
+        // Make an immutable copy
+        NSArray *events = [NSArray arrayWithArray:_eventQueue];
+
         // Update Queue to remove events sent to server
-        [_eventQueue removeObjectsInRange:theRange];
+        [_eventQueue removeAllObjects];
 
         // Send Array of Events to Server
         [strongSelf postEvents:events];
