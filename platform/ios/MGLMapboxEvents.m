@@ -44,6 +44,9 @@ NSString *const MGLEventGesturePanStart = @"Pan";
 NSString *const MGLEventGesturePinchStart = @"Pinch";
 NSString *const MGLEventGestureRotateStart = @"Rotation";
 
+const NSUInteger MGLMaximumEventsPerFlush = 20;
+const NSTimeInterval MGLFlushInterval = 60;
+
 @interface MGLMapboxEventsData : NSObject
 
 // All of the following properties are written to only from
@@ -140,7 +143,6 @@ NSString *const MGLEventGestureRotateStart = @"Rotation";
 @property (atomic) NSString *appName;
 @property (atomic) NSString *appVersion;
 @property (atomic) NSString *appBuildNumber;
-@property (atomic) NSUInteger flushAt;
 @property (atomic) NSDateFormatter *rfc3339DateFormatter;
 @property (atomic) NSURLSession *session;
 @property (atomic) NSData *digicertCert;
@@ -156,10 +158,6 @@ NSString *const MGLEventGestureRotateStart = @"Rotation";
 // The timer is only ever accessed from the main thread.
 //
 @property (nonatomic) NSTimer *timer;
-
-// The flush expiration time is only ever accessed from the main thread.
-//
-@property (nonatomic) NSTimeInterval flushAfter;
 
 // This is an array of events to push. All access to it will be
 // from our own serial queue.
@@ -241,8 +239,6 @@ NSString *const MGLEventGestureRotateStart = @"Rotation";
 
         // Events Control
         _eventQueue = [[NSMutableArray alloc] init];
-        _flushAt = 20;
-        _flushAfter = 60;
         
         // Setup Date Format
         _rfc3339DateFormatter = [[NSDateFormatter alloc] init];
@@ -298,6 +294,9 @@ NSString *const MGLEventGestureRotateStart = @"Rotation";
         return;
     }
     self.paused = YES;
+    [_timer invalidate];
+    _timer = nil;
+    [_eventQueue removeAllObjects];
     _data = nil;
     [_session invalidateAndCancel];
     _session = nil;
@@ -415,7 +414,7 @@ NSString *const MGLEventGestureRotateStart = @"Rotation";
         [_eventQueue addObject:finalEvent];
         
         // Has Flush Limit Been Reached?
-        if (_eventQueue.count >= strongSelf.flushAt) {
+        if (_eventQueue.count >= MGLMaximumEventsPerFlush) {
             [strongSelf flush];
         } else if (_eventQueue.count ==  1) {
             // If this is first new event on queue start timer,
@@ -439,22 +438,12 @@ NSString *const MGLEventGestureRotateStart = @"Rotation";
 
     dispatch_async(_serialQueue, ^{
         MGLMapboxEvents *strongSelf = weakSelf;
-        if ( ! strongSelf) return;
+        if ( ! strongSelf || [_eventQueue count] == 0) return;
         
-        __block NSArray *events;
-
-        NSUInteger upper = strongSelf.flushAt;
-        if (strongSelf.flushAt > [_eventQueue count]) {
-            if ([_eventQueue count] == 0) {
-                return;
-            }
-            upper = [_eventQueue count];
-        }
-    
         // Create Array of Events to push to the Server
-        NSRange theRange = NSMakeRange(0, upper);
-        events = [_eventQueue subarrayWithRange:theRange];
-    
+        NSRange theRange = NSMakeRange(0, MIN(MGLMaximumEventsPerFlush, [_eventQueue count]));
+        NSArray *events = [_eventQueue subarrayWithRange:theRange];
+        
         // Update Queue to remove events sent to server
         [_eventQueue removeObjectsInRange:theRange];
 
@@ -503,14 +492,11 @@ NSString *const MGLEventGestureRotateStart = @"Rotation";
 - (void) startTimer {
     void (^timerBlock)() = ^{
         // Stop Timer if it already exists
-        if (_timer) {
-            [_timer invalidate];
-            _timer = nil;
-        }
+        [_timer invalidate];
 
         // Start New Timer
-        _timer = [NSTimer scheduledTimerWithTimeInterval:_flushAfter
-                                                  target:[self class]
+        _timer = [NSTimer scheduledTimerWithTimeInterval:MGLFlushInterval
+                                                  target:self
                                                 selector:@selector(flush)
                                                 userInfo:nil
                                                  repeats:YES];
